@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+
+  # ── Job 1: Lint + type check ──────────────────────────────────────────────
+  lint:
+    name: Lint & type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dev dependencies
+        run: uv sync --extra dev
+
+      - name: Run ruff (linter + import sorter)
+        run: uv run ruff check .
+
+      - name: Run mypy (type checker)
+        run: uv run mypy . --ignore-missing-imports --exclude ".venv"
+
+  # ── Job 2: Unit tests (no API key needed, always runs) ───────────────────
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dev dependencies
+        run: uv sync --extra dev
+
+      - name: Run unit tests with coverage
+        # Runs both graph/chains/tests/ (co-located) and tests/ (root)
+        # pytest.ini sets testpaths = ["tests", "graph"] so both are found
+        run: |
+          uv run pytest -v -m unit \
+            --cov=. \
+            --cov-omit=".venv/*,tests/*,graph/chains/tests/*" \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-fail-under=80
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  # ── Job 3: Integration tests (needs GROQ_API_KEY secret) ─────────────────
+  integration-tests:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    if: ${{ secrets.GROQ_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dev dependencies
+        run: uv sync --extra dev
+
+      - name: Run integration tests
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          VERBOSE: "false"
+        run: uv run pytest -v -m integration
+
+  # ── Job 4: Build + smoke test (runtime deps only, no API key) ────────────
+  build-check:
+    name: Build & smoke test
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime dependencies only
+        # Deliberately NOT installing dev deps — catches any leakage
+        run: uv sync
+
+      - name: Verify all imports resolve cleanly
+        run: |
+          uv run python -c "
+          from graph.consts import MODEL_NAME, VERBOSE, GREET_NODE, RESPOND_NODE
+          from graph.state import AgentState
+          from graph.graph import build_graph
+          from api.runner import run
+          print('All imports OK')
+          app = build_graph()
+          print('Graph compiled OK')
+          "
+
+      - name: Smoke test — full pipeline with mocked LLM
+        env:
+          GROQ_API_KEY: "dummy-key-for-smoke-test"
+        run: |
+          uv run python -c "
+          from unittest.mock import patch
+          with patch('graph.nodes.respond_node.call_llm', return_value='Smoke OK.'):
+              from api.runner import run
+              result = run('smoke test')
+              assert result['response'] == 'Smoke OK.', f'Unexpected: {result}'
+              assert result['error'] is None, f'Error: {result[\"error\"]}'
+              assert 'smoke test' in result['formatted_input']
+              print('Smoke test passed.')
+          "

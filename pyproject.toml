@@ -1,0 +1,46 @@
+[project]
+name = "langgraph-starter"
+version = "0.1.0"
+description = "A minimal, production-ready LangGraph starter project"
+requires-python = ">=3.11"
+
+dependencies = [
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
+    "groq>=0.9.0",
+    "python-dotenv>=1.0.0",
+]
+
+# Dev dependencies using the current standard (replaces deprecated tool.uv.dev-dependencies)
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+]
+
+# No [build-system] section — this is an app, not a library.
+# uv runs it directly with: uv run python main.py
+# Removing hatchling avoids the "no package directory found" error entirely.
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+exclude = [".venv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "graph/nodes", "graph/chains/tests"]
+addopts   = "--tb=short -q"
+markers   = [
+    "unit: fast offline tests, no LLM calls",
+    "integration: full graph run, some call the real LLM",
+]

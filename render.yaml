@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: langgraph-starter
+    runtime: python
+    region: ohio
+    plan: free
+    buildCommand: pip install -e ".[dev]"
+    startCommand: python main.py
+    pythonVersion: "3.11"
+    autoDeploy: true
+    branch: main
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: MODEL_NAME
+        value: llama-3.3-70b-versatile
+      - key: MAX_TOKENS
+        value: "1024"
+      - key: TEMPERATURE
+        value: "0.7"
+      - key: MAX_ITERATIONS
+        value: "5"
+      - key: VERBOSE
+        value: "false"
