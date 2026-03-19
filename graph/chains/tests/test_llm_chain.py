@@ -1,30 +1,20 @@
 """
 graph/chains/tests/test_llm_chain.py — Unit tests for llm_chain.py.
 
-WHY ARE TESTS CO-LOCATED INSIDE chains/?
-  Eden Marco places tests next to the code they test — specifically
-  inside the chains/ folder. This is the "co-location" pattern:
+WHAT THESE TEST:
+  The behaviour of call_llm() — what it returns, how it handles errors,
+  what it does when the API key is missing.
 
-    graph/chains/llm_chain.py        ← the implementation
-    graph/chains/tests/              ← tests for that implementation
-
-  The reasoning:
-  - chains/ contains the concentrated LLM logic worth unit-testing
-  - When you open graph/chains/, you immediately see the tests
-  - When you delete a chain, the tests travel with it — no orphans
-  - Nodes are thin wrappers; chains are where the logic lives
-
-  We adopt this for chains/ but NOT for nodes/ (which are too thin
-  to warrant co-located tests) and NOT for edges/ (routing functions
-  are tested at the integration level via test_graph.py).
-
-  Root-level tests/ handles graph integration and api layer tests.
+WHAT THESE DO NOT TEST:
+  The Groq client's internal call structure (messages format, model param).
+  That's implementation detail — it breaks whenever you swap LLM providers.
+  Test behaviour, not implementation.
 
 MARKS:
-  @pytest.mark.unit        — no real LLM call (mock_llm fixture)
-  @pytest.mark.integration — real LLM call (requires GROQ_API_KEY)
+  @pytest.mark.unit        — no real LLM call, runs offline
+  @pytest.mark.integration — real LLM call, requires GROQ_API_KEY
 
-RUN JUST THESE:
+RUN:
   pytest graph/chains/tests/ -v
   pytest graph/chains/tests/ -v -m unit
 """
@@ -34,58 +24,103 @@ from unittest.mock import patch
 
 import pytest
 
-# ── Unit tests (mocked LLM — no API key needed) ───────────────────────────────
+# ── Unit tests — mock the Groq client at the lowest possible level ─────────────
+# We patch _client.chat.completions.create and build a proper mock response
+# object so call_llm's internal .choices[0].message.content.strip() works.
+
+
+def _make_groq_response(content: str):
+    """Build a minimal mock that mirrors the Groq response structure."""
+    from unittest.mock import MagicMock
+
+    mock_response = MagicMock()
+    mock_response.choices[0].message.content = content
+    return mock_response
+
 
 @pytest.mark.unit
 class TestCallLlmUnit:
 
-    def test_returns_string(self, mock_llm_chain):
+    def test_returns_string(self):
         """call_llm must always return a plain string."""
         from graph.chains.llm_chain import call_llm
-        result = call_llm(system="You are helpful.", user="Hello")
+
+        with patch(
+            "graph.chains.llm_chain._client.chat.completions.create",
+            return_value=_make_groq_response("hello"),
+        ):
+            result = call_llm(system="You are helpful.", user="Hello")
         assert isinstance(result, str)
 
-    def test_returns_mocked_value(self, mock_llm_chain):
-        """Return value comes from the mock, not the real API."""
+    def test_returns_llm_content(self):
+        """call_llm returns the content string from the LLM response."""
         from graph.chains.llm_chain import call_llm
-        mock_llm_chain.return_value = "Mocked chain reply."
-        result = call_llm(system="sys", user="user")
-        assert result == "Mocked chain reply."
 
-    def test_passes_system_prompt(self, mock_llm_chain):
-        """call_llm forwards the system argument to the Groq client."""
-        from graph.chains.llm_chain import call_llm
-        call_llm(system="Custom system prompt.", user="question")
-        call_args = mock_llm_chain.call_args
-        messages = call_args.kwargs.get("messages") or call_args.args[0]
-        system_msg = next(m for m in messages if m["role"] == "system")
-        assert system_msg["content"] == "Custom system prompt."
+        with patch(
+            "graph.chains.llm_chain._client.chat.completions.create",
+            return_value=_make_groq_response("Paris"),
+        ):
+            result = call_llm(system="sys", user="Capital of France?")
+        assert result == "Paris"
 
-    def test_passes_user_prompt(self, mock_llm_chain):
-        """call_llm forwards the user argument to the Groq client."""
+    def test_strips_whitespace_from_response(self):
+        """Responses with leading/trailing whitespace are stripped."""
         from graph.chains.llm_chain import call_llm
-        call_llm(system="sys", user="My specific question.")
-        call_args = mock_llm_chain.call_args
-        messages = call_args.kwargs.get("messages") or call_args.args[0]
-        user_msg = next(m for m in messages if m["role"] == "user")
-        assert "My specific question." in user_msg["content"]
+
+        with patch(
+            "graph.chains.llm_chain._client.chat.completions.create",
+            return_value=_make_groq_response("  reply with spaces  "),
+        ):
+            result = call_llm(system="sys", user="q")
+        assert result == "reply with spaces"
 
     def test_raises_when_api_key_missing(self):
         """call_llm must raise RuntimeError if GROQ_API_KEY is not set."""
         with patch("graph.chains.llm_chain.GROQ_API_KEY", ""):
-            from graph.chains.llm_chain import call_llm
+            from graph.chains import llm_chain
+
             with pytest.raises(RuntimeError, match="GROQ_API_KEY"):
-                call_llm(system="sys", user="hello")
+                llm_chain.call_llm(system="sys", user="hello")
 
-    def test_strips_whitespace_from_response(self, mock_llm_chain):
-        """Responses with leading/trailing whitespace are stripped."""
+    def test_groq_client_is_called_once(self):
+        """call_llm must call the Groq client exactly once per invocation."""
         from graph.chains.llm_chain import call_llm
-        mock_llm_chain.return_value = "  reply with spaces  "
-        result = call_llm(system="sys", user="q")
-        assert result == "reply with spaces"
+
+        with patch(
+            "graph.chains.llm_chain._client.chat.completions.create",
+            return_value=_make_groq_response("ok"),
+        ) as mock_create:
+            call_llm(system="sys", user="user")
+        mock_create.assert_called_once()
+
+    def test_groq_exception_propagates(self):
+        """Exceptions from the Groq client propagate to the caller."""
+        from graph.chains.llm_chain import call_llm
+
+        with patch(
+            "graph.chains.llm_chain._client.chat.completions.create",
+            side_effect=Exception("rate limit hit"),
+        ):
+            with pytest.raises(Exception, match="rate limit hit"):
+                call_llm(system="sys", user="user")
+
+    def test_none_content_returns_empty_string(self):
+        """When model returns None content (e.g. content filter), return empty string."""
+        from graph.chains.llm_chain import call_llm
+
+        mock_resp = MagicMock()
+        mock_resp.choices[0].message.content = None
+        with patch(
+            "graph.chains.llm_chain._client.chat.completions.create",
+            return_value=mock_resp,
+        ):
+            result = call_llm(system="sys", user="user")
+        assert result == ""
+        assert isinstance(result, str)
 
 
-# ── Integration tests (real LLM call) ─────────────────────────────────────────
+# ── Integration tests — real LLM call ─────────────────────────────────────────
+
 
 @pytest.mark.integration
 @pytest.mark.skipif(
@@ -95,8 +130,9 @@ class TestCallLlmUnit:
 class TestCallLlmIntegration:
 
     def test_real_call_returns_non_empty_string(self):
-        """Real API call must return a non-empty string."""
+        """End-to-end: the real Groq API must return a non-empty string."""
         from graph.chains.llm_chain import call_llm
+
         result = call_llm(
             system="You are a helpful assistant.",
             user="Reply with exactly the word: hello",
@@ -105,8 +141,9 @@ class TestCallLlmIntegration:
         assert len(result) > 0
 
     def test_real_call_respects_system_prompt(self):
-        """The LLM should follow a simple instruction in the system prompt."""
+        """The LLM should follow a clear instruction in the system prompt."""
         from graph.chains.llm_chain import call_llm
+
         result = call_llm(
             system="Always reply with exactly the word PONG and nothing else.",
             user="PING",

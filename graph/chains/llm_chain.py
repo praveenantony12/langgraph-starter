@@ -11,7 +11,7 @@ WHY CHAINS, NOT NODES?
   2. Multiple nodes can share the same chain
   3. You can swap chain implementations without touching node logic
 
-  The tests/ folder inside chains/ (not nodes/) reflects this:
+  The tests/ folder inside chains/ reflects this:
   chains contain the logic worth unit-testing in isolation.
 
 HOW TO ADD A NEW CHAIN:
@@ -57,7 +57,7 @@ def call_llm(
         max_tokens:  Response length cap.
 
     Returns:
-        Stripped response string.
+        Stripped response string. Empty string if the model returns no content.
 
     Raises:
         RuntimeError: GROQ_API_KEY is not set.
@@ -65,8 +65,7 @@ def call_llm(
     """
     if not GROQ_API_KEY:
         raise RuntimeError(
-            "GROQ_API_KEY is not set.\n"
-            "Add it to .env:  GROQ_API_KEY=your_key_here"
+            "GROQ_API_KEY is not set.\n" "Add it to .env:  GROQ_API_KEY=your_key_here"
         )
 
     if VERBOSE:
@@ -77,20 +76,14 @@ def call_llm(
         model=MODEL_NAME,
         messages=[
             {"role": "system", "content": system},
-            {"role": "user",   "content": user},
+            {"role": "user", "content": user},
         ],
         temperature=temperature,
         max_tokens=max_tokens,
     )
 
-    # In production, Groq returns a rich completion object.
-    # In unit tests, we mock this as a plain string.
-    if isinstance(completion, str):
-        return completion.strip()
-
-    try:
-        content = completion.choices[0].message.content
-    except Exception:
-        content = str(completion)
-
-    return (content or "").strip()
+    # The Groq SDK types content as str | None — the model can theoretically
+    # return an empty message (e.g. on a content filter hit). We normalise
+    # None to an empty string so callers always receive a str, never None.
+    content = completion.choices[0].message.content
+    return content.strip() if content is not None else ""

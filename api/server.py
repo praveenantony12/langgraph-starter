@@ -1,99 +1,102 @@
 """
-api/server.py — Minimal HTTP server for Render.
+api/server.py — FastAPI HTTP server.
 
-Render marks deployments as failed when it can't detect a process listening
-on the allocated $PORT. This server keeps the process alive and exposes:
-  - GET  /healthz
-  - POST /chat  (JSON body: {"message": "...", "session_id": "...optional"})
+WHY THIS FILE EXISTS:
+  Render (and every other PaaS) requires a process that binds to $PORT.
+  main.py detects the PORT env var and routes to this file automatically.
+  Locally you run main.py directly; on Render this file serves requests.
 
-It reuses `api.runner.run()` as the single graph invocation boundary.
+ENDPOINTS:
+  GET  /          → health check, confirms the service is alive
+  GET  /health    → same, explicit health endpoint for Render's health check
+  POST /chat      → invoke the graph with a message, return the response
+
+HOW TO TEST LOCALLY:
+  PORT=8000 uv run python main.py
+  curl http://localhost:8000/health
+  curl -X POST http://localhost:8000/chat \
+    -H "Content-Type: application/json" \
+    -d '{"message": "Hello!"}'
+
+WHEN YOU BUILD YOUR OWN APP:
+  Add your own endpoints here. The graph is invoked via api/runner.py —
+  keep all HTTP routing in this file and all graph logic in runner.py.
 """
 
-from __future__ import annotations
-
-import json
 import os
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
-from urllib.parse import urlparse
+import uuid
+
+from fastapi import FastAPI
+from pydantic import BaseModel
 
 from api.runner import run
 
-
-def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict[str, Any]) -> None:
-    body = json.dumps(payload).encode("utf-8")
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    handler.wfile.write(body)
+app = FastAPI(
+    title="langgraph-starter",
+    description="A minimal LangGraph API",
+    version="0.1.0",
+)
 
 
-class RequestHandler(BaseHTTPRequestHandler):
-    server_version = "langgraph-starter/1.0"
+# ── Request / response models ──────────────────────────────────────────────────
 
-    def log_message(self, format: str, *args: Any) -> None:
-        # Keep logs readable in Render; don't spam default BaseHTTPRequestHandler logs.
-        return
-
-    def do_GET(self) -> None:  # noqa: N802
-        parsed = urlparse(self.path)
-        if parsed.path == "/healthz":
-            _json_response(self, HTTPStatus.OK, {"status": "ok"})
-            return
-
-        _json_response(self, HTTPStatus.NOT_FOUND, {"error": "not found"})
-
-    def do_POST(self) -> None:  # noqa: N802
-        parsed = urlparse(self.path)
-        if parsed.path != "/chat":
-            _json_response(self, HTTPStatus.NOT_FOUND, {"error": "not found"})
-            return
-
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
-            _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "invalid Content-Length"})
-            return
-
-        raw = self.rfile.read(length) if length > 0 else b"{}"
-        try:
-            body = json.loads(raw.decode("utf-8"))
-        except Exception:
-            _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "invalid JSON"})
-            return
-
-        message = (body.get("message") or body.get("user_message") or "").strip()
-        session_id = body.get("session_id") or body.get("thread_id")
-
-        if not message:
-            _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "message is required"})
-            return
-
-        try:
-            result = run(message, thread_id=session_id)
-        except Exception as exc:
-            _json_response(
-                self,
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-                {"user_message": message, "response": "", "iteration": 0, "error": str(exc)},
-            )
-            return
-
-        # `result` is AgentState TypedDict; return what the caller needs.
-        _json_response(self, HTTPStatus.OK, dict(result))
+class ChatRequest(BaseModel):
+    message: str
+    thread_id: str | None = None
 
 
-def main() -> None:
+class ChatResponse(BaseModel):
+    response: str
+    thread_id: str
+    error: str | None = None
+
+
+# ── Endpoints ──────────────────────────────────────────────────────────────────
+
+@app.get("/")
+async def root():
+    """Root endpoint — confirms the service is running."""
+    return {"status": "ok", "service": "langgraph-starter"}
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint — Render pings this to confirm liveness."""
+    return {"status": "healthy"}
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(body: ChatRequest):
+    """
+    Invoke the LangGraph pipeline with a user message.
+
+    Returns the agent's response and the thread_id used.
+    Pass the same thread_id in subsequent requests to continue
+    a conversation (the graph checkpointer keeps state per thread).
+    """
+    thread_id = body.thread_id or str(uuid.uuid4())
+
+    result = run(body.message, thread_id=thread_id)
+
+    if result.get("error"):
+        # Return 200 with the error in the body — the graph ran, it just
+        # encountered an error. Use 500 only for unhandled server crashes.
+        return ChatResponse(
+            response="",
+            thread_id=thread_id,
+            error=result["error"],
+        )
+
+    return ChatResponse(
+        response=result.get("response", ""),
+        thread_id=thread_id,
+    )
+
+
+# ── Entry point ────────────────────────────────────────────────────────────────
+
+def main():
+    """Called by main.py when PORT env var is detected."""
+    import uvicorn
     port = int(os.environ.get("PORT", "8000"))
-    host = os.environ.get("HOST", "0.0.0.0")
-
-    httpd = ThreadingHTTPServer((host, port), RequestHandler)
-    print(f"Starting server on {host}:{port}", flush=True)
-    httpd.serve_forever()
-
-
-if __name__ == "__main__":
-    main()
-
+    uvicorn.run(app, host="0.0.0.0", port=port)

@@ -1,7 +1,11 @@
 """
 main.py — Entry point.
 
-  python main.py
+LOCAL:   uv run python main.py           → runs one graph turn, prints result
+RENDER:  PORT is set automatically       → starts FastAPI server on $PORT
+
+The PORT check means the same file works for both local dev and deployment
+without any changes.
 """
 
 import os
@@ -10,17 +14,16 @@ from api.runner import run
 
 
 def main() -> None:
+    # Render (and all PaaS) sets PORT. When present, start the HTTP server.
+    if os.environ.get("PORT"):
+        from api.server import main as serve
+        serve()
+        return
+
+    # Local dev — run one turn and print the result
     print("=" * 50)
     print("  langgraph-starter")
     print("=" * 50)
-
-    # Render (and most PaaS) sets `PORT`. When present, we should run a web
-    # server so the platform can detect open ports and keep the process alive.
-    if os.environ.get("PORT"):
-        from api.server import main as serve
-
-        serve()
-        return
 
     result = run("Hello! What can you do?")
 
