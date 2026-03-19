@@ -5,7 +5,7 @@ services:
     region: ohio
     plan: free
     buildCommand: 'curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH="/opt/render/.local/bin:$PATH" && uv sync --group dev'
-    startCommand: '/opt/render/.local/bin/uv run python main.py'
+    startCommand: './.venv/bin/python main.py'
     pythonVersion: "3.11"
     autoDeploy: true
     branch: main

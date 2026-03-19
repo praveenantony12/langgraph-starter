@@ -1,0 +1,51 @@
+# .cursorignore — controls what Cursor shows in the file explorer
+# and what it includes in AI context.
+#
+# PHILOSOPHY:
+#   Show only files you actively open and edit.
+#   Hide everything auto-generated, auto-managed, or rarely touched.
+#   This keeps the explorer clean and stops Cursor's AI from wasting
+#   context window on bytecode and lock files.
+#
+# NOTE: This does NOT affect git. Files hidden here can still be
+#   committed. See .gitignore for what git ignores.
+
+# ── Python runtime noise ───────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ── Empty package markers — never edited, just exist ──────────────────────────
+# Comment this out if you want to see them (e.g. when debugging imports)
+**/__init__.py
+
+# ── Virtual environment — thousands of files, never open these ────────────────
+.venv/
+venv/
+env/
+
+# ── Tool caches — auto-regenerated, never hand-edited ─────────────────────────
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# ── Test output ────────────────────────────────────────────────────────────────
+.coverage
+coverage.xml
+htmlcov/
+
+# ── Dependency lock file — managed by uv, never hand-edited ───────────────────
+# Still committed to git. Just not useful to have open in the editor.
+uv.lock
+
+# ── Single-value config files — set once, never touched again ─────────────────
+.python-version
+
+# ── Deployment and CI — only open these when changing infrastructure ───────────
+# Comment these out when you're actively working on CI or deployment config.
+render.yaml
+.github/
+
+# ── OS noise ───────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

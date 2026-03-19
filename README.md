@@ -177,7 +177,7 @@ Integration tests are skipped automatically if the secret is absent.
 
 ```
 Build command:  curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH="/opt/render/.local/bin:$PATH" && uv sync --group dev
-Start command:  /opt/render/.local/bin/uv run python main.py
+Start command:  ./.venv/bin/python main.py
 ```
 
 Add one environment variable in the Render dashboard:
